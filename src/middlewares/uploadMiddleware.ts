@@ -1,6 +1,7 @@
 import { v2 as cloudinary } from 'cloudinary';
-import { CloudinaryStorage } from 'multer-storage-cloudinary';
 import multer from 'multer';
+import type { Request } from 'express';
+import type { StorageEngine } from 'multer';
 
 // 1) Configure Cloudinary
 cloudinary.config({
@@ -9,17 +10,49 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// 2) Configure Storage
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: async (_req, _file) => {
-    return {
-      folder: 'lms_uploads',
-      allowed_formats: ['jpg', 'jpeg', 'png', 'pdf'],
-      transformation: [{ width: 800, height: 800, crop: 'limit' }],
-    };
+// 2) Stream uploads directly to Cloudinary without a legacy storage adapter.
+const storage: StorageEngine = {
+  _handleFile(
+    _req: Request,
+    file: Express.Multer.File,
+    callback: (error?: unknown, info?: Partial<Express.Multer.File>) => void,
+  ): void {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'lms_uploads',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'pdf'],
+        resource_type: 'auto',
+        transformation: [{ width: 800, height: 800, crop: 'limit' }],
+      },
+      (error, result) => {
+        if (error) {
+          callback(error);
+          return;
+        }
+
+        if (!result) {
+          callback(new Error('Cloudinary upload completed without a result'));
+          return;
+        }
+
+        callback(null, {
+          path: result.secure_url,
+          filename: result.public_id,
+          size: result.bytes,
+        });
+      },
+    );
+
+    file.stream.pipe(uploadStream);
   },
-});
+  _removeFile(
+    _req: Request,
+    _file: Express.Multer.File,
+    callback: (error: Error | null) => void,
+  ): void {
+    callback(null);
+  },
+};
 
 // 3) Init upload
 const upload = multer({
